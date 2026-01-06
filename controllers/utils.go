@@ -268,6 +268,7 @@ func GetImageForComponent(componentName string, client client.Client) (string, e
 
 	// Load release info (set retrieveImages to false for faster loading)
 	releaseInfo, err := infoOptions.LoadReleaseInfo(releaseImage, false)
+	
 	if err != nil {
 		fmt.Printf("Error loading release info: %v\n", err)
 		return "", err

@@ -8,3 +8,9 @@ data:
   
   # Path within the container image where kernel is located
   kernelPath: "/artifacts/kernel/vmlinuz"
+
+  # Kata version
+  kataVersion: "3.21.0"
+
+  # OSC version
+  oscVersion: "1.11"

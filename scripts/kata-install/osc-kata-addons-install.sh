@@ -111,10 +111,10 @@ uninstall_addons() {
     # Remove installed artifacts
     chroot /host rm -f "$install_dir/$(basename "$kernel_src")"
      
-    # Restore config backup
-    local config_file="/etc/kata-containers/kata-se/configuration.toml"
-    local backup=$(ls -t "${config_file}.backup-"* 2>/dev/null | head -1)
-    [ -n "$backup" ] && [ -f "$backup" ] && chroot /host cp "$backup" "$config_file"
+    # # Restore config backup
+    # local config_file="/etc/kata-containers/kata-se/configuration.toml"
+    # local backup=$(ls -t "${config_file}.backup-"* 2>/dev/null | head -1)
+    # [ -n "$backup" ] && [ -f "$backup" ] && chroot /host cp "$backup" "$config_file"
     
     echo "Addon artifacts uninstalled"
     return 0

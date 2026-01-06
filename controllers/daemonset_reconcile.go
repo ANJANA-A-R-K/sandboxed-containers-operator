@@ -415,7 +415,9 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequestDaemonSet
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{
+		RequeueAfter: 10 * time.Minute,
+	}, nil
 }
 
 func (r *KataConfigOpenShiftReconciler) addPeerPodsConfigDaemonSet() error {
@@ -702,6 +704,8 @@ func (r *KataConfigOpenShiftReconciler) getAddonEnvVars() []corev1.EnvVar {
     }{
         {"addonImage", "ADDON_IMAGE"},
         {"kernelPath", "ADDON_KERNEL_PATH"},
+		{"kataVersion", "KATA_VERSION"},
+		{"oscVersion", "OSC_VERSION"},
     }
 
     var envs []corev1.EnvVar
@@ -716,6 +720,8 @@ func (r *KataConfigOpenShiftReconciler) getAddonEnvVars() []corev1.EnvVar {
     r.Log.Info("Addon artifacts configured",
         "image", data["addonImage"],
         "kernelPath", data["kernelPath"],
+		"kataVersion", data["kataVersion"],
+		"oscVersion", data["oscVersion"],
     )
 
     return envs

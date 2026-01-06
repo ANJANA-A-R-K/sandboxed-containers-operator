@@ -83,6 +83,11 @@ set_status_uninstalled() {
 	label_node "uninstalled"
 }
 
+extract_kata_version_from_rpm() {
+    local rpm="$1"
+    basename "$rpm" | sed -E 's/^kata-containers-([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/'
+}
+
 install() {
 	# Initial wait: avoid doing anything if a previous staged update is pending
 	wait_for_reboot_clear
@@ -102,6 +107,22 @@ install() {
 		if [[ -z "$rpm_path" ]]; then
 			echo "No RPM found for $package"
 			continue
+		fi
+
+		if [[ "$package" == "kata-containers" ]]; then
+			if [[ -z "${KATA_VERSION:-}" ]]; then
+				echo "ERROR: KATA_VERSION is not set for OSC"
+				exit 1
+			fi
+			rpm_kata_version=$(extract_kata_version_from_rpm "$rpm_path")
+			if [[ "$rpm_kata_version" != "$KATA_VERSION" ]]; then
+				echo "ERROR: Kata version mismatch for OSC"
+				echo "Expected: ${KATA_VERSION}"
+				echo "Found:    ${rpm_kata_version}"
+				exit 1
+			fi
+
+			echo "Kata version validation passed: ${rpm_kata_version}"
 		fi
 
 		# Get available version
