@@ -704,7 +704,6 @@ func (r *KataConfigOpenShiftReconciler) getAddonEnvVars() []corev1.EnvVar {
 	}{
 		{"addonImage", "ADDON_IMAGE"},
 		{"kernelPath", "ADDON_KERNEL_PATH"},
-		{"kataVersion", "KATA_VERSION"},
 	}
 
 	var envs []corev1.EnvVar
@@ -719,7 +718,6 @@ func (r *KataConfigOpenShiftReconciler) getAddonEnvVars() []corev1.EnvVar {
 	r.Log.Info("Addon artifacts configured",
 		"image", data["addonImage"],
 		"kernelPath", data["kernelPath"],
-		"kataVersion", data["kataVersion"],
 	)
 
 	return envs
