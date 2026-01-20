@@ -99,15 +99,18 @@ extract_kata_version_from_addon_image() {
         "$addon_image" \
         "/artifacts" \
         "$ADDON_STAGE_DIR" \
-        "/tmp/regauth/auth.json"
+        "/tmp/regauth/auth.json" >/dev/null
+    
 
-    if [[ ! -f "$ADDON_STAGE_DIR/version.json" ]]; then
+    if [[ ! -f "$ADDON_STAGE_DIR/artifacts/version.json" ]]; then
         echo "ERROR: version.json not found in addon image"
         exit 1
     fi
 
     local kata_version
-    kata_version=$(jq -r '.kata_version' "$ADDON_STAGE_DIR/version.json")
+    kata_version=$(grep -oE '"kata_version"[[:space:]]*:[[:space:]]*"[^"]+"' "$ADDON_STAGE_DIR/artifacts/version.json" | cut -d'"' -f4)
+
+    rm -rf "$ADDON_STAGE_DIR"
 
     if [[ -z "$kata_version" || "$kata_version" == "null" ]]; then
         echo "ERROR: kata_version missing in version.json"
@@ -139,7 +142,7 @@ install() {
 		fi
 
 		if [[ "$package" == "kata-containers" && -n "${ADDON_IMAGE:-}" ]]; then
-            rpm_kata_version=$(extract_kata_version_from_rpm "$rpm_path")
+            		rpm_kata_version=$(extract_kata_version_from_rpm "$rpm_path")
 			addon_kata_version=$(extract_kata_version_from_addon_image "$ADDON_IMAGE")
 
 			if [[ "$addon_kata_version" != "$rpm_kata_version" ]]; then
@@ -151,7 +154,7 @@ install() {
 
 			echo "Addon image kata version validated: $addon_kata_version"
 
-        fi
+        	fi
 
 		# Get available version
 		available_version=$(rpm -qp "$rpm_path")

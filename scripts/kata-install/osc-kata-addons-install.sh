@@ -53,8 +53,8 @@ install_addons() {
     local kernel_file
     kernel_file="$(basename "$kernel_src")"
 
-    local staged_dir="/host/var/lib/kata/addons/kernel"
-    local staged_kernel="${staged_dir}/${kernel_file}"
+    local staged_dir="/host/var/lib/kata/addons"
+    local staged_kernel="${staged_dir}/${kernel_src}"
 
     if [[ ! -f "$staged_kernel" ]]; then
         echo "ERROR: Staged kernel not found: $staged_kernel" >&2
