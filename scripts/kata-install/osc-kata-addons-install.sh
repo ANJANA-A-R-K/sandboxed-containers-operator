@@ -73,6 +73,7 @@ install_addons() {
     update_config "$kernel_path"
 
     echo "Addon installation completed"
+	ls $staged_dir
     return 0
 }
 

@@ -144,6 +144,14 @@ install() {
             rpm_kata_version=$(extract_kata_version_from_rpm "$rpm_path")
 			addon_kata_version=$(extract_kata_version_from_addon_image "$ADDON_IMAGE")
 
+			echo "anjana test"
+			ls "/host/var/lib/kata/addons"
+			echo "========"
+			ls "/host/var/lib/kata/addons/artifacts"
+			echo "========"
+			ls "/host/var/lib/kata/addons/artifacts/kernel"
+
+
 			if [[ "$addon_kata_version" != "$rpm_kata_version" ]]; then
 				echo "ERROR: Kata version mismatch between addon image and host RPM"
 				echo "Addon image kata version: $addon_kata_version"
