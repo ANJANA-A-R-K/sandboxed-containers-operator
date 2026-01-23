@@ -187,8 +187,26 @@ uninstall() {
 	wait_for_reboot_clear
 }
 
+is_peer_pods_enabled() {
+	local enabled
+
+	if ! enabled="$(kubectl get kataconfig cluster-kataconfig \
+		-o jsonpath='{.spec.enablePeerPods}')"; then
+		error "failed to read KataConfig enablePeerPods"
+		return 1
+	fi
+
+	[[ "${enabled}" == "true" ]]
+}
+
 get_cloud_provider() {
 	local provider
+
+	# If peer pods are disabled
+	if ! is_peer_pods_enabled; then
+		echo "Peerpod flow is not enabled"
+		return 0
+	fi
 
 	# Run kubectl: capture rc and stdout
 	if ! provider="$(kubectl get configmap/peer-pods-cm \
@@ -263,20 +281,23 @@ rpm-extensions() {
 	local provider
 	local extension_image
 
-	provider="$(get_cloud_provider)"
+	if ! is_peer_pods_enabled; then
+		# No peer pods, use EXTENSION_IMAGE
+		extension_image="$EXTENSION_IMAGE"
+	else
+		provider="$(get_cloud_provider)"
 
-	case "${provider}" in
-	ibmcloud)
-		local version
-		version="$(get_worker_node_version_ibmcloud)"
-		extension_image="$(get_extension_image $version)"
-		;;
-
-	*)
-		extension_image=$EXTENSION_IMAGE
-		;;
-
-	esac
+		case "${provider}" in
+		ibmcloud)
+			local version
+			version="$(get_worker_node_version_ibmcloud)"
+			extension_image="$(get_extension_image "$version")"
+			;;
+		*)
+			extension_image="$EXTENSION_IMAGE"
+			;;
+		esac
+	fi
 
 	mkdir -p "/usr/share/rpm-ostree/extensions"
 	extract_container_image "$extension_image" "/usr/share/rpm-ostree/extensions" "/usr/share/rpm-ostree" "/tmp/regauth/auth.json"
