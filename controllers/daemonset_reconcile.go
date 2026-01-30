@@ -319,7 +319,9 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequestDaemonSet
 		}
 	}
 
-	return ctrl.Result{}, nil
+	return ctrl.Result{
+		RequeueAfter: 10 * time.Minute,
+	}, nil
 }
 
 // daemonSetForKataInstall creates a DaemonSet for installing or uninstalling Kata based on the specified action.
