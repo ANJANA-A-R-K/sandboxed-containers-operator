@@ -9,7 +9,7 @@ import (
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -57,11 +57,13 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 			},
 		},
 		Spec: mcfgv1.MachineConfigSpec{
-			Config: generateAddonIgnition(addonImage, kernelPath),
+			// Raw Ignition JSON
+			Config: runtime.RawExtension{
+				Raw: []byte(generateIgnitionJSON(addonImage, kernelPath)),
+			},
 		},
 	}
 
-	// Create or update MC
 	err = r.Client.Create(context.TODO(), mc)
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
@@ -79,47 +81,30 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 	return nil
 }
 
-// generateAddonIgnition generates a MachineConfig Ignition spec with embedded kernel install script
-func generateAddonIgnition(addonImage, kernelPath string) mcfgv1.Ignition {
-	return mcfgv1.Ignition{
-		Version: "3.2.0",
-		Storage: mcfgv1.Storage{
-			Files: []mcfgv1.File{
-				{
-					Node: mcfgv1.Node{
-						Path: "/usr/local/bin/update-kata-kernel.sh",
-					},
-					FileEmbedded1: mcfgv1.FileEmbedded1{
-						Contents: mcfgv1.Resource{
-							Source: ptr("data:text/plain;base64," + b64(renderKernelScript(addonImage, kernelPath))),
-						},
-						Mode: ptrInt(0755),
-					},
-				},
-			},
-		},
-		Systemd: mcfgv1.Systemd{
-			Units: []mcfgv1.Unit{
-				{
-					Name:    "kata-addon-kernel.service",
-					Enabled: ptr(true),
-					Contents: ptr(`[Unit]
-Description=Install Kata kernel from addon image
-After=network.target
+// generateIgnitionJSON creates Ignition JSON as string
+func generateIgnitionJSON(addonImage, kernelPath string) string {
+	scriptBase64 := base64.StdEncoding.EncodeToString([]byte(renderKernelScript(addonImage, kernelPath)))
 
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/update-kata-kernel.sh
-
-[Install]
-WantedBy=multi-user.target`),
-				},
-			},
-		},
-	}
+	return fmt.Sprintf(`{
+  "ignition": { "version": "3.2.0" },
+  "storage": {
+    "files": [{
+      "path": "/usr/local/bin/update-kata-kernel.sh",
+      "mode": 493,
+      "contents": { "source": "data:text/plain;base64,%s" }
+    }]
+  },
+  "systemd": {
+    "units": [{
+      "name": "kata-addon-kernel.service",
+      "enabled": true,
+      "contents": "[Unit]\nDescription=Install Kata kernel from addon image\nAfter=network.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/update-kata-kernel.sh\n\n[Install]\nWantedBy=multi-user.target"
+    }]
+  }
+}`, scriptBase64)
 }
 
-// renderKernelScript generates a bash script that pulls the kernel from container and updates TOML
+// renderKernelScript generates the bash script that pulls kernel from container and updates TOML
 func renderKernelScript(addonImage, kernelSrc string) string {
 	return fmt.Sprintf(`#!/bin/bash
 set -e
@@ -151,16 +136,4 @@ fi
 rm -rf "$TEMP_DIR"
 echo "Kernel addon installation completed"
 `, addonImage, addonImage, addonImage, kernelSrc, kernelSrc, kernelSrc)
-}
-
-func ptr(s string) *string {
-	return &s
-}
-
-func ptrInt(i int) *int {
-	return &i
-}
-
-func b64(s string) string {
-	return base64.StdEncoding.EncodeToString([]byte(s))
 }
