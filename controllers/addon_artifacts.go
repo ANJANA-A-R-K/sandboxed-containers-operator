@@ -9,6 +9,7 @@ import (
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -60,6 +61,7 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 		},
 	}
 
+	// Create or update MC
 	err = r.Client.Create(context.TODO(), mc)
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
@@ -77,11 +79,10 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 	return nil
 }
 
-func generateAddonIgnition(addonImage, kernelPath string) mcfgv1.Config {
-	return mcfgv1.Config{
-		Ignition: mcfgv1.Ignition{
-			Version: "3.2.0",
-		},
+// generateAddonIgnition generates a MachineConfig Ignition spec with embedded kernel install script
+func generateAddonIgnition(addonImage, kernelPath string) mcfgv1.Ignition {
+	return mcfgv1.Ignition{
+		Version: "3.2.0",
 		Storage: mcfgv1.Storage{
 			Files: []mcfgv1.File{
 				{
@@ -102,8 +103,7 @@ func generateAddonIgnition(addonImage, kernelPath string) mcfgv1.Config {
 				{
 					Name:    "kata-addon-kernel.service",
 					Enabled: ptr(true),
-					Contents: ptr(`
-[Unit]
+					Contents: ptr(`[Unit]
 Description=Install Kata kernel from addon image
 After=network.target
 
@@ -112,8 +112,7 @@ Type=oneshot
 ExecStart=/usr/local/bin/update-kata-kernel.sh
 
 [Install]
-WantedBy=multi-user.target
-`),
+WantedBy=multi-user.target`),
 				},
 			},
 		},
