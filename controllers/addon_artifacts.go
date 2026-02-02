@@ -3,13 +3,15 @@ package controllers
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"runtime"
 
 	mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
+	k8sruntime "k8s.io/apimachinery/pkg/runtime"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -48,6 +50,11 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 
 	r.Log.Info("Creating/updating addon MC for kernel installation")
 
+	ignitionJSON, err := generateIgnitionJSON(addonImage, kernelPath)
+	if err != nil {
+		return fmt.Errorf("failed to generate ignition JSON: %v", err)
+	}
+
 	mc := &mcfgv1.MachineConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: AddonMCName,
@@ -57,13 +64,13 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 			},
 		},
 		Spec: mcfgv1.MachineConfigSpec{
-			// Raw Ignition JSON
-			Config: runtime.RawExtension{
-				Raw: []byte(generateIgnitionJSON(addonImage, kernelPath)),
+			Config: k8sruntime.RawExtension{
+				Raw: ignitionJSON,
 			},
 		},
 	}
 
+	// Create or update the MC
 	err = r.Client.Create(context.TODO(), mc)
 	if err != nil {
 		if errors.IsAlreadyExists(err) {
@@ -81,53 +88,69 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsMC() error {
 	return nil
 }
 
-// generateIgnitionJSON creates Ignition JSON as string
-func generateIgnitionJSON(addonImage, kernelPath string) string {
-	scriptBase64 := base64.StdEncoding.EncodeToString([]byte(renderKernelScript(addonImage, kernelPath)))
+// generateIgnitionJSON returns raw JSON bytes for MachineConfig
+func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
+	ign := map[string]interface{}{
+		"ignition": map[string]interface{}{
+			"version": "3.2.0",
+		},
+		"storage": map[string]interface{}{
+			"files": []map[string]interface{}{
+				{
+					"path": "/usr/local/bin/update-kata-kernel.sh",
+					"mode": 0755,
+					"contents": map[string]interface{}{
+						"source": "data:text/plain;base64," + b64(renderKernelScript(addonImage, kernelPath)),
+					},
+				},
+			},
+		},
+		"systemd": map[string]interface{}{
+			"units": []map[string]interface{}{
+				{
+					"name":    "kata-addon-kernel.service",
+					"enabled": true,
+					"contents": `[Unit]
+Description=Install Kata kernel from addon image
+After=network.target
 
-	return fmt.Sprintf(`{
-  "ignition": { "version": "3.2.0" },
-  "storage": {
-    "files": [{
-      "path": "/usr/local/bin/update-kata-kernel.sh",
-      "mode": 493,
-      "contents": { "source": "data:text/plain;base64,%s" }
-    }]
-  },
-  "systemd": {
-    "units": [{
-      "name": "kata-addon-kernel.service",
-      "enabled": true,
-      "contents": "[Unit]\nDescription=Install Kata kernel from addon image\nAfter=network.target\n\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/update-kata-kernel.sh\n\n[Install]\nWantedBy=multi-user.target"
-    }]
-  }
-}`, scriptBase64)
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-kata-kernel.sh
+
+[Install]
+WantedBy=multi-user.target`,
+				},
+			},
+		},
+	}
+
+	return json.Marshal(ign)
 }
 
-// renderKernelScript generates the bash script that pulls kernel from container and updates TOML
+// renderKernelScript returns a shell script that pulls kernel using skopeo and updates configuration.toml
 func renderKernelScript(addonImage, kernelSrc string) string {
 	return fmt.Sprintf(`#!/bin/bash
 set -e
 
-# Directories
 INSTALL_DIR="/etc/kata-containers"
 TEMP_DIR="/tmp/kata-addon-$$"
 
 mkdir -p "$INSTALL_DIR" "$TEMP_DIR"
 
-echo "Pulling kernel from container image: %s"
-ctr -n=k8s.io images pull "%s"
-ctr -n=k8s.io images export "$TEMP_DIR/addon.tar" "%s"
-tar -xf "$TEMP_DIR/addon.tar" -C "$TEMP_DIR" "%s"
+echo "Extracting kernel from container image: %s"
 
-KERNEL_FILE=$(basename "%s")
-cp "$TEMP_DIR/%s" "$INSTALL_DIR/"
-chmod 644 "$INSTALL_DIR/$KERNEL_FILE"
+# Use skopeo to copy image and extract kernel
+skopeo copy docker://%s oci:$TEMP_DIR:image
+mkdir -p "$TEMP_DIR/extract"
+umoci unpack --rootless --image "$TEMP_DIR/image" "$TEMP_DIR/extract"
+cp "$TEMP_DIR/extract/%s" "$INSTALL_DIR/"
+chmod 644 "$INSTALL_DIR/$(basename %s)"
 
 # Update configuration.toml
 CFG="/etc/kata-containers/kata-se/configuration.toml"
 if [ -f "$CFG" ]; then
-    sed -i "s|^kernel *= *\".*\"|kernel = \"/etc/kata-containers/$KERNEL_FILE\"|" "$CFG"
+    sed -i "s|^kernel *= *\".*\"|kernel = \"/etc/kata-containers/$(basename %s)\"|" "$CFG"
     echo "Updated Kata kernel path in configuration.toml"
 else
     echo "Warning: $CFG not found, skipping config update"
@@ -135,5 +158,13 @@ fi
 
 rm -rf "$TEMP_DIR"
 echo "Kernel addon installation completed"
-`, addonImage, addonImage, addonImage, kernelSrc, kernelSrc, kernelSrc)
+`, addonImage, addonImage, kernelSrc, kernelSrc, kernelSrc)
+}
+
+func ptr(s string) *string {
+	return &s
+}
+
+func b64(s string) string {
+	return base64.StdEncoding.EncodeToString([]byte(s))
 }
