@@ -29,10 +29,10 @@ func (r *KataConfigOpenShiftReconciler) reconcileAddonArtifactsJob(
 	}
 
 	// Only in MachineConfigMode
-	if r.DeploymentMode != "MachineConfigMode" {
-		r.Log.Info("Skipping addon artifacts: not MachineConfigMode")
-		return nil
-	}
+	// if r.DeploymentMode != "MachineConfigMode" {
+	// 	r.Log.Info("Skipping addon artifacts: not MachineConfigMode")
+	// 	return nil
+	// }
 
 	// Fetch addon ConfigMap
 	cm := &corev1.ConfigMap{}
