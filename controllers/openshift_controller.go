@@ -1179,9 +1179,9 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		r.setInProgressConditionToInstalling()
 	}
 
-	if err := r.reconcileAddonArtifactsMC(ctx, machinePool); err != nil {
-		r.Log.Error(err, "Failed to reconcile s390x addon MC")
-		return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err
+	if err := r.reconcileAddonArtifactsMC(machinePool); err != nil {
+			r.Log.Error(err, "Failed to reconcile addon MachineConfig")
+			return ctrl.Result{Requeue: true}, err
 	}
 
 	// Create kata-oc MCP only if it's not a converged cluster
