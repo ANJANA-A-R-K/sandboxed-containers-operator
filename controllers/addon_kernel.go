@@ -1,4 +1,4 @@
-package addonmc
+package controllers
 
 import (
     "context"
@@ -7,16 +7,15 @@ import (
     "fmt"
     "strings"
 
-    "github.com/go-logr/logr"
     mcfgv1 "github.com/openshift/api/machineconfiguration/v1"
     corev1 "k8s.io/api/core/v1"
-    "k8s.io/apimachinery/pkg/api/errors"
+    k8serrors "k8s.io/apimachinery/pkg/api/errors"
     "k8s.io/apimachinery/pkg/runtime"
     metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/types"
-    "sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// Constants for addon artifacts
 const (
     AddonArtifactsCM = "kata-addon-artifacts"
     AddonMCName      = "99-kata-addon-kernel"
@@ -24,25 +23,20 @@ const (
     AddonScriptPath  = "/usr/local/bin/update-kata-kernel.sh"
 )
 
-// EnsureAddonKernelMC ensures (create/update) the MachineConfig that drops a oneshot
-// script+unit to pull the addon image and copy the kernel into AddonDestPath.
-// Returns (didChange, err). If the ConfigMap is missing, returns (false, nil).
-func EnsureAddonKernelMC(
-    ctx context.Context,
-    c client.Client,
-    log logr.Logger,
-    scheme *runtime.Scheme,
-    machinePool string,
-    operatorNamespace string,
-) (bool, error) {
-    // Read addon artifacts ConfigMap (optional)
+// EnsureAddonKernelMC creates/updates the MachineConfig that drops a oneshot
+// script + systemd unit to pull the addon image and copy the kernel to AddonDestPath.
+// Returns (didChange, err). If the ConfigMap is missing or incomplete -> (false, nil).
+func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) (bool, error) {
+    ctx := context.TODO()
+
+    // Read optional ConfigMap
     cm := &corev1.ConfigMap{}
-    if err := c.Get(ctx, types.NamespacedName{
+    if err := r.Client.Get(ctx, types.NamespacedName{
         Name:      AddonArtifactsCM,
-        Namespace: operatorNamespace,
+        Namespace: OperatorNamespace,
     }, cm); err != nil {
-        if errors.IsNotFound(err) {
-            log.Info("addon CM not found → skipping addon MC")
+        if k8serrors.IsNotFound(err) {
+            r.Log.Info("addon CM not found → skipping addon MC")
             return false, nil
         }
         return false, err
@@ -51,11 +45,11 @@ func EnsureAddonKernelMC(
     addonImage := strings.TrimSpace(cm.Data["addonImage"])
     kernelPath := strings.TrimSpace(cm.Data["kernelPath"])
     if addonImage == "" || kernelPath == "" {
-        log.Info("addonImage or kernelPath missing in CM → skipping addon MC")
+        r.Log.Info("addonImage or kernelPath missing → skipping addon MC")
         return false, nil
     }
 
-    log.Info("Reconciling addon MachineConfig", "image", addonImage, "kernelPath", kernelPath)
+    r.Log.Info("Reconciling addon MachineConfig", "image", addonImage, "kernelPath", kernelPath)
 
     ignJSON, err := generateIgnitionJSON(addonImage, kernelPath)
     if err != nil {
@@ -76,41 +70,45 @@ func EnsureAddonKernelMC(
     }
 
     // Create or Update
-    if err := c.Create(ctx, mc); err != nil {
-        if errors.IsAlreadyExists(err) {
+    if err := r.Client.Create(ctx, mc); err != nil {
+        if k8serrors.IsAlreadyExists(err) {
             existing := &mcfgv1.MachineConfig{}
-            if getErr := c.Get(ctx, types.NamespacedName{Name: AddonMCName}, existing); getErr != nil {
+            if getErr := r.Client.Get(ctx, types.NamespacedName{Name: AddonMCName}, existing); getErr != nil {
                 return false, getErr
             }
             existing.Spec = mc.Spec
-            if updErr := c.Update(ctx, existing); updErr != nil {
+            if updErr := r.Client.Update(ctx, existing); updErr != nil {
                 return false, updErr
             }
-            log.Info("addon MC updated")
+            r.Log.Info("addon MC updated")
             return true, nil
         }
         return false, err
     }
 
-    log.Info("addon MC created")
+    r.Log.Info("addon MC created")
     return true, nil
 }
 
 // DeleteAddonKernelMC removes the addon MC (ok if already gone; caller handles NotFound).
-func DeleteAddonKernelMC(ctx context.Context, c client.Client, log logr.Logger) error {
+func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {
+    ctx := context.TODO()
     mc := &mcfgv1.MachineConfig{}
-    if err := c.Get(ctx, types.NamespacedName{Name: AddonMCName}, mc); err != nil {
+    if err := r.Client.Get(ctx, types.NamespacedName{Name: AddonMCName}, mc); err != nil {
         return err
     }
-    log.Info("Deleting addon MC")
-    return c.Delete(ctx, mc)
+    r.Log.Info("Deleting addon MC")
+    return r.Client.Delete(ctx, mc)
 }
+
+// --- Helpers ---
 
 func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
     script := renderKernelScript()
     script = strings.ReplaceAll(script, "ADDON_IMAGE", addonImage)
     script = strings.ReplaceAll(script, "KERNEL_PATH", kernelPath)
 
+    // Build ignition as plain JSON via Go maps
     ign := map[string]interface{}{
         "ignition": map[string]interface{}{"version": "3.2.0"},
         "storage": map[string]interface{}{
@@ -145,6 +143,7 @@ WantedBy=multi-user.target`,
             },
         },
     }
+
     return json.Marshal(ign)
 }
 

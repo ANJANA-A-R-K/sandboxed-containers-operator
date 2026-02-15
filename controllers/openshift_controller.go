@@ -2319,22 +2319,4 @@ func (r *KataConfigOpenShiftReconciler) postKataInstallation() (*ctrl.Result, er
 		}
 	}
 	return nil, nil
-
-	func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) (bool, error) {    
-		return addonmc.EnsureAddonKernelMC(        
-			context.TODO(),        
-			r.Client,        
-			r.Log,        r.Scheme,       
-			machinePool,        
-			OperatorNamespace,    
-		)
-	}
-	
-	func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {    
-		return addonmc.DeleteAddonKernelMC(        
-			context.TODO(),        
-			r.Client,        
-			r.Log,    
-		)
-	}
 }
