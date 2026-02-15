@@ -1110,6 +1110,13 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 		}
 	}
 
+	if r.DeploymentMode == MachineConfigMode {        
+		if err := r.DeleteAddonKernelMC(); err != nil && !k8serrors.IsNotFound(err) {           
+			r.Log.Error(err, "failed to delete addon kernel MC")            
+			return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err        
+		}    
+	}
+
 	err = r.deleteDaemonsetForMonitor()
 	if err != nil {
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 15}, err
@@ -1223,6 +1230,17 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		if wasMcJustCreated {
 			r.kataConfig.Status.WaitingForMcoToStart = true
 		}
+	}
+
+	if r.DeploymentMode == MachineConfigMode {        
+		if didChange, err := r.EnsureAddonKernelMC(machinePool); err != nil {            
+			r.Log.Error(err, "failed ensuring addon kernel MachineConfig")            
+			return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err        
+		} else if didChange {            
+			r.kataConfig.Status.WaitingForMcoToStart = true        
+		} else {            
+			r.Log.Info("kata-addon-artifacts CM not found; proceeding without addon MC")        
+		}    
 	}
 
 	isMcoUpdating := r.isMcpUpdating(machinePool)
@@ -2301,4 +2319,22 @@ func (r *KataConfigOpenShiftReconciler) postKataInstallation() (*ctrl.Result, er
 		}
 	}
 	return nil, nil
+
+	func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) (bool, error) {    
+		return addonmc.EnsureAddonKernelMC(        
+			context.TODO(),        
+			r.Client,        
+			r.Log,        r.Scheme,       
+			machinePool,        
+			OperatorNamespace,    
+		)
+	}
+	
+	func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {    
+		return addonmc.DeleteAddonKernelMC(        
+			context.TODO(),        
+			r.Client,        
+			r.Log,    
+		)
+	}
 }
