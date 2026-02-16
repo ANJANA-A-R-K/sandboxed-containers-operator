@@ -152,14 +152,14 @@ func renderKernelScript() string {
 set -euo pipefail
 
 IMAGE="ADDON_IMAGE"
-KERNEL_PATH="KERNEL_PATH"
+KERNEL="KERNEL_PATH"
 DEST="` + AddonDestPath + `"
 
 echo "[INFO] Pulling addon image: ${IMAGE}"
 podman pull ${IMAGE}
 
 CTR=$(podman create ${IMAGE})
-podman cp ${CTR}:${KERNEL_PATH} ${DEST}
+podman cp ${CTR}:${KERNEL} ${DEST}
 podman rm ${CTR}
 
 chmod 0644 ${DEST}
