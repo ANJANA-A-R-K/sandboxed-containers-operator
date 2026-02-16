@@ -15,7 +15,6 @@ import (
     "k8s.io/apimachinery/pkg/types"
 )
 
-// Constants for addon artifacts
 const (
     AddonArtifactsCM = "kata-addon-artifacts"
     AddonMCName      = "99-kata-addon-kernel"
@@ -23,13 +22,10 @@ const (
     AddonScriptPath  = "/usr/local/bin/update-kata-kernel.sh"
 )
 
-// EnsureAddonKernelMC creates/updates the MachineConfig that drops a oneshot
-// script + systemd unit to pull the addon image and copy the kernel to AddonDestPath.
-// Returns (didChange, err). If the ConfigMap is missing or incomplete -> (false, nil).
+
 func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) (bool, error) {
     ctx := context.TODO()
 
-    // Read optional ConfigMap
     cm := &corev1.ConfigMap{}
     if err := r.Client.Get(ctx, types.NamespacedName{
         Name:      AddonArtifactsCM,
@@ -69,7 +65,6 @@ func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) 
         },
     }
 
-    // Create or Update
     if err := r.Client.Create(ctx, mc); err != nil {
         if k8serrors.IsAlreadyExists(err) {
             existing := &mcfgv1.MachineConfig{}
@@ -90,7 +85,6 @@ func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) 
     return true, nil
 }
 
-// DeleteAddonKernelMC removes the addon MC (ok if already gone; caller handles NotFound).
 func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {
     ctx := context.TODO()
     mc := &mcfgv1.MachineConfig{}
@@ -101,14 +95,12 @@ func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {
     return r.Client.Delete(ctx, mc)
 }
 
-// --- Helpers ---
 
 func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
     script := renderKernelScript()
     script = strings.ReplaceAll(script, "ADDON_IMAGE", addonImage)
     script = strings.ReplaceAll(script, "KERNEL_PATH", kernelPath)
 
-    // Build ignition as plain JSON via Go maps
     ign := map[string]interface{}{
         "ignition": map[string]interface{}{"version": "3.2.0"},
         "storage": map[string]interface{}{
@@ -162,12 +154,7 @@ CTR=$(podman create ${IMAGE})
 podman cp ${CTR}:${KERNEL} ${DEST}
 podman rm ${CTR}
 
-chmod 0644 ${DEST}
-# SELinux relabel if available
-if command -v restorecon >/dev/null 2>&1; then
-  restorecon -Fv "${DEST}" || true
-fi
-
+chmod 0755 ${DEST}
 echo "[INFO] Kata addon kernel update complete"
 `
 }
