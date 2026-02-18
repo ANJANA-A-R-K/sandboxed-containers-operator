@@ -1234,12 +1234,12 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	}
 
 	if r.DeploymentMode == MachineConfigMode {
-    	if err := r.EnsureAddonKernelMC(machinePool); err != nil {
+		_, err := r.EnsureAddonKernelMC(machinePool)
+		if err != nil {
 			r.Log.Error(err, "failed ensuring addon kernel MachineConfig")
 			return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err
 		}
 	}
-
 
 	isMcoUpdating := r.isMcpUpdating(machinePool)
 	r.Log.Info("MCP updating state", "MCP name", machinePool, "is updating", isMcoUpdating)
