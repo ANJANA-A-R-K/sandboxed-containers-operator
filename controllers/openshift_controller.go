@@ -987,6 +987,26 @@ func (r *KataConfigOpenShiftReconciler) isMcpUpdating(mcpName string) bool {
 	return apihelpers.IsMachineConfigPoolConditionTrue(mcp.Status.Conditions, mcfgv1.MachineConfigPoolUpdating)
 }
 
+func (r *KataConfigOpenShiftReconciler) isMcpUpdated(mcpName string) bool {
+    mcp := &mcfgv1.MachineConfigPool{}
+    err := r.Client.Get(context.TODO(), types.NamespacedName{Name: mcpName}, mcp)
+    if err != nil {
+        r.Log.Info("Getting MachineConfigPool failed", "machinePool", mcpName, "err", err)
+        return false
+    }
+    return apihelpers.IsMachineConfigPoolConditionTrue(mcp.Status.Conditions, mcfgv1.MachineConfigPoolUpdated)
+}
+
+func (r *KataConfigOpenShiftReconciler) isMcpDegraded(mcpName string) bool {
+    mcp := &mcfgv1.MachineConfigPool{}
+    err := r.Client.Get(context.TODO(), types.NamespacedName{Name: mcpName}, mcp)
+    if err != nil {
+        r.Log.Info("Getting MachineConfigPool failed", "machinePool", mcpName, "err", err)
+        return false
+    }
+    return apihelpers.IsMachineConfigPoolConditionTrue(mcp.Status.Conditions, mcfgv1.MachineConfigPoolDegraded)
+}
+
 func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.Result, error) {
 	r.Log.Info("KataConfig deletion in progress: ")
 	machinePool, err := r.getMcpName()
@@ -1236,7 +1256,8 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		if didChange, err := r.EnsureAddonKernelMC(machinePool); err != nil {            
 			r.Log.Error(err, "failed ensuring addon kernel MachineConfig")            
 			return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err        
-		} else if didChange {            
+		} else if didChange {      
+			r.Log.Info("[debug] Entering into didchange")   
 			r.kataConfig.Status.WaitingForMcoToStart = true        
 		} else {            
 			r.Log.Info("kata-addon-artifacts CM not found; proceeding without addon MC")        
@@ -1249,6 +1270,18 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	if isMcoUpdating && r.getInProgressConditionValue() == corev1.ConditionFalse {
 		r.setInProgressConditionToUpdating()
 	}
+
+	// isMcoUpdating := r.isMcpUpdating(machinePool)
+    isMcoUpdated := r.isMcpUpdated(machinePool)
+    isMcoDegraded := r.isMcpDegraded(machinePool)
+
+    r.Log.Info("MCP state",
+        "machinePool", machinePool,
+        "Updating", isMcoUpdating,
+        "Updated", isMcoUpdated,
+        "Degraded", isMcoDegraded,
+        "WaitingForMcoToStart", r.kataConfig.Status.WaitingForMcoToStart,
+    )
 
 	// This condition might look tricky so here's a quick rundown of
 	// what each possible state means:
@@ -1266,15 +1299,44 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	//     The MCO isn't updating nor do we think it should be.  This is
 	//     the case e.g. when we're reconciliating a KataConfig change
 	//     that doesn't affect kata installation on cluster.
-	if !isMcoUpdating && r.kataConfig.Status.WaitingForMcoToStart {
-		r.Log.Info("Waiting for MCO to start updating.")
-		// We don't requeue, an MCP going Updated->Updating will
-		// trigger reconciliation by itself thanks to our watching MCPs.
-		return reconcile.Result{}, nil
-	} else {
-		r.Log.Info("No need to wait for MCO to start updating.", "isMcoUpdating", isMcoUpdating, "Status.WaitingForMcoToStart", r.kataConfig.Status.WaitingForMcoToStart)
-		r.kataConfig.Status.WaitingForMcoToStart = false
-	}
+	// if !isMcoUpdating && r.kataConfig.Status.WaitingForMcoToStart {
+	// 	r.Log.Info("Waiting for MCO to start updating.")
+	// 	// We don't requeue, an MCP going Updated->Updating will
+	// 	// trigger reconciliation by itself thanks to our watching MCPs.
+	// 	return reconcile.Result{}, nil
+	// } else if isMcoUpdated {
+    //         // MCO already finished; stop waiting
+    //         r.Log.Info("MCP already updated; clearing WaitingForMcoToStart", "machinePool", machinePool)
+    //         r.kataConfig.Status.WaitingForMcoToStart = false
+    // } else {
+	// 	r.Log.Info("No need to wait for MCO to start updating.", "isMcoUpdating", isMcoUpdating, "Status.WaitingForMcoToStart", r.kataConfig.Status.WaitingForMcoToStart)
+	// 	r.kataConfig.Status.WaitingForMcoToStart = false
+	// }
+
+	if r.kataConfig.Status.WaitingForMcoToStart {
+        if isMcoUpdating {
+            // MCO started; stop "waiting to start"
+            r.kataConfig.Status.WaitingForMcoToStart = false
+        } else if isMcoUpdated {
+            // MCO already finished; stop waiting
+            r.Log.Info("MCP already updated; clearing WaitingForMcoToStart", "machinePool", machinePool)
+            r.kataConfig.Status.WaitingForMcoToStart = false
+        } else if isMcoDegraded {
+            // Avoid waiting forever in degraded state; allow status updates and error surfacing
+            r.Log.Info("MCP degraded; clearing WaitingForMcoToStart to avoid deadlock", "machinePool", machinePool)
+            r.kataConfig.Status.WaitingForMcoToStart = false
+        } else {
+            // Not updating, not updated, not degraded => truly waiting for MCO to pick up changes
+            r.Log.Info("Waiting for MCO to start updating.", "machinePool", machinePool)
+            // No requeue: MCP Updated->Updating should trigger reconciliation via MCP watch
+            return reconcile.Result{}, nil
+        }
+    }
+
+    // // Update KataConfig status (node lists etc.)
+    // if err := r.updateStatus(); err != nil {
+    //     r.Log.Info("Error updating KataConfig.status", "err", err)
+    // }
 
 	err = r.updateStatus()
 	if err != nil {
