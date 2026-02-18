@@ -1248,6 +1248,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		}
 	} else {
 		if wasMcJustCreated {
+			r.Log.Info("[debug] Entering into wasMcJustCreated")
 			r.kataConfig.Status.WaitingForMcoToStart = true
 		}
 	}
