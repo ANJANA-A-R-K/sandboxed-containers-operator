@@ -49,7 +49,7 @@ func (r *KataConfigOpenShiftReconciler) CreateOrUpdateAddonKernelMC(machinePool 
 
 	r.Log.Info("Reconciling addon MachineConfig", "image", addonImage, "kernelPath", kernelPath)
 
-	ignJSON, err := generateIgnitionJSON(addonImage, kernelPath)
+	ignJSON, err := generateIgnitionJSON(addonImage, kernelPath, kataVersionPat)
 	if err != nil {
 		return fmt.Errorf("failed to generate ignition JSON: %w", err)
 	}
@@ -91,7 +91,7 @@ func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {
 	return client.IgnoreNotFound(r.Client.Delete(ctx, mc))
 }
 
-func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
+func generateIgnitionJSON(addonImage, kernelPath, kataVersionPath string) ([]byte, error) {
 	script := renderKernelScript()
 	script = strings.ReplaceAll(script, "ADDON_IMAGE", addonImage)
 	script = strings.ReplaceAll(script, "KERNEL_PATH", kernelPath)
