@@ -41,7 +41,8 @@ func (r *KataConfigOpenShiftReconciler) CreateOrUpdateAddonKernelMC(machinePool 
 
 	addonImage := strings.TrimSpace(cm.Data["addonImage"])
 	kernelPath := strings.TrimSpace(cm.Data["kernelPath"])
-	if addonImage == "" || kernelPath == "" {
+	kataVersionPath := strings.TrimSpace(cm.Data["kataVersion"])
+	if addonImage == "" || kernelPath == "" || kataVersionPath == ""{
 		r.Log.Info("addonImage or kernelPath missing, skipping addon MC")
 		return nil
 	}
@@ -94,6 +95,7 @@ func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
 	script := renderKernelScript()
 	script = strings.ReplaceAll(script, "ADDON_IMAGE", addonImage)
 	script = strings.ReplaceAll(script, "KERNEL_PATH", kernelPath)
+	script = strings.ReplaceAll(script, "KATA_VERSION_PATH", kataVersionPath)
 
 	ign := map[string]interface{}{
 		"ignition": map[string]interface{}{"version": "3.2.0"},
@@ -139,14 +141,48 @@ set -euo pipefail
 
 IMAGE="ADDON_IMAGE"
 KERNEL="KERNEL_PATH"
+VERSION_JSON="KATA_VERSION_PATH"
 DEST="` + AddonDestPath + `"
+
+TMPDIR=$(mktemp -d)
+trap "rm -rf ${TMPDIR}" EXIT
 
 echo "[INFO] Pulling addon image: ${IMAGE}"
 podman pull ${IMAGE}
 
 CTR=$(podman create ${IMAGE})
+
+echo "[INFO] Extracting version.json from image"
+podman cp ${CTR}:${VERSION_JSON} ${TMPDIR}/version.json
+
 podman cp ${CTR}:${KERNEL} ${DEST}
 podman rm ${CTR}
+
+# Extract required kata version from JSON
+REQUIRED_VERSION=$(jq -r '.version' ${TMPDIR}/version.json)
+
+if [ -z "${REQUIRED_VERSION}" ]; then
+    echo "[ERROR] Could not determine required Kata version from addon image"
+    exit 1
+fi
+
+# Get installed kata version
+INSTALLED_VERSION=$(rpm -q --qf '%{VERSION}' kata-containers 2>/dev/null || true)
+
+if [ -z "${INSTALLED_VERSION}" ]; then
+    echo "[ERROR] Kata containers not installed on node"
+    exit 1
+fi
+
+echo "[INFO] Required Kata version: ${REQUIRED_VERSION}"
+echo "[INFO] Installed Kata version: ${INSTALLED_VERSION}"
+
+if [ "${REQUIRED_VERSION}" != "${INSTALLED_VERSION}" ]; then
+    echo "[ERROR] Kata version mismatch!"
+    echo "[ERROR] Add-on image requires Kata ${REQUIRED_VERSION}"
+    echo "[ERROR] Installed Kata version is ${INSTALLED_VERSION}"
+    exit 1
+fi
 
 chmod 0755 ${DEST}
 echo "[INFO] Kata addon kernel update complete"
