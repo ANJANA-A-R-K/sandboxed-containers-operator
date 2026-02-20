@@ -1111,7 +1111,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 	}
 
 	if r.DeploymentMode == MachineConfigMode {
-		if err := r.DeleteAddonKernelMC(); err != nil && !k8serrors.IsNotFound(err) {
+		if err := r.DeleteAddonKernelMC(); err != nil { {
 			r.Log.Error(err, "failed to delete addon kernel MC")
 			return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err
 		}
@@ -1233,8 +1233,8 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	}
 
 	if r.DeploymentMode == MachineConfigMode {
-		if err := r.EnsureAddonKernelMC(machinePool); err != nil {
-			r.Log.Error(err, "failed ensuring addon kernel MachineConfig")
+		if err := r.CreateOrUpdateAddonKernelMC(machinePool); err != nil {
+			r.Log.Error(err, "failed to create/update addon kernel MachineConfig")
 			return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err
 		}
 	}

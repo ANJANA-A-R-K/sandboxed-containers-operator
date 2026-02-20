@@ -11,6 +11,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 )
@@ -22,10 +23,10 @@ const (
 	AddonScriptPath  = "/usr/local/bin/update-kata-kernel.sh"
 )
 
-func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) error {
-	ctx := context.TODO()
+func (r *KataConfigOpenShiftReconciler) CreateOrUpdateAddonKernelMC(machinePool string) error {
+    ctx := context.TODO()
 
-	cm := &corev1.ConfigMap{}
+    cm := &corev1.ConfigMap{}
 	if err := r.Client.Get(ctx, types.NamespacedName{
 		Name:      AddonArtifactsCM,
 		Namespace: OperatorNamespace,
@@ -51,47 +52,41 @@ func (r *KataConfigOpenShiftReconciler) EnsureAddonKernelMC(machinePool string) 
 		return fmt.Errorf("failed to generate ignition JSON: %w", err)
 	}
 
-	mc := &mcfgv1.MachineConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: AddonMCName,
-			Labels: map[string]string{
-				"machineconfiguration.openshift.io/role": machinePool,
-				"app":                                    "sandboxed-containers-addon",
-			},
-		},
-		Spec: mcfgv1.MachineConfigSpec{
-			Config: runtime.RawExtension{Raw: ignJSON},
-		},
-	}
+    mc := &mcfgv1.MachineConfig{
+        ObjectMeta: metav1.ObjectMeta{
+            Name: AddonMCName,
+        },
+    }
 
-	if err := r.Client.Create(ctx, mc); err != nil {
-		if k8serrors.IsAlreadyExists(err) {
-			existing := &mcfgv1.MachineConfig{}
-			if getErr := r.Client.Get(ctx, types.NamespacedName{Name: AddonMCName}, existing); getErr != nil {
-				return getErr
-			}
-			existing.Spec = mc.Spec
-			if updErr := r.Client.Update(ctx, existing); updErr != nil {
-				return updErr
-			}
-			r.Log.Info("addon MC updated")
-			return nil
-		}
-		return err
-	}
+    op, err := controllerutil.CreateOrUpdate(ctx, r.Client, mc, func() error {
+        if mc.Labels == nil {
+            mc.Labels = map[string]string{}
+        }
+        mc.Labels["machineconfiguration.openshift.io/role"] = machinePool
+        mc.Labels["app"] = "sandboxed-containers-addon"
 
-	r.Log.Info("addon MC created")
-	return nil
+        mc.Spec = mcfgv1.MachineConfigSpec{
+            Config: runtime.RawExtension{Raw: ignJSON},
+        }
+        return nil
+    })
+    if err != nil {
+        return err
+    }
+
+    r.Log.Info("addon MachineConfig reconciled", "operation", op)
+    return nil
 }
 
 func (r *KataConfigOpenShiftReconciler) DeleteAddonKernelMC() error {
-	ctx := context.TODO()
-	mc := &mcfgv1.MachineConfig{}
-	if err := r.Client.Get(ctx, types.NamespacedName{Name: AddonMCName}, mc); err != nil {
-		return err
-	}
-	r.Log.Info("Deleting addon MC")
-	return r.Client.Delete(ctx, mc)
+	ctx := context.TODO()    
+	r.Log.Info("Deleting addon MC") 
+	mc := &mcfgv1.MachineConfig{        
+		ObjectMeta: metav1.ObjectMeta{            
+			Name: AddonMCName,        
+		},   
+	}    
+	return client.IgnoreNotFound(r.Client.Delete(ctx, mc))
 }
 
 func generateIgnitionJSON(addonImage, kernelPath string) ([]byte, error) {
