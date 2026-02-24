@@ -1041,6 +1041,11 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 		}
 	}
 
+	if err := r.DeleteAddonKernelMC(); err != nil {
+		r.Log.Error(err, "Failed to delete addon kernel MC")
+		return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err
+	}
+
 	isConvergedCluster, _ := r.checkConvergedCluster()
 
 	// Conditions to detect whether we need to wait for the MCO to start
@@ -1110,13 +1115,6 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 		}
 	}
 
-	if r.DeploymentMode == MachineConfigMode {
-		if err := r.DeleteAddonKernelMC(); err != nil {
-			r.Log.Error(err, "Failed to delete addon kernel MC")
-			return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err
-		}
-	}
-
 	err = r.deleteDaemonsetForMonitor()
 	if err != nil {
 		return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 15}, err
@@ -1182,6 +1180,11 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		return ctrl.Result{Requeue: true}, nil
 	}
 
+	if err := r.CreateOrUpdateAddonKernelMC(machinePool); err != nil {
+		r.Log.Error(err, "Failed to create or update addon kernel MachineConfig")
+		return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err
+	}
+
 	if wasMcJustCreated {
 		r.setInProgressConditionToInstalling()
 	}
@@ -1229,13 +1232,6 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	} else {
 		if wasMcJustCreated {
 			r.kataConfig.Status.WaitingForMcoToStart = true
-		}
-	}
-
-	if r.DeploymentMode == MachineConfigMode {
-		if err := r.CreateOrUpdateAddonKernelMC(machinePool); err != nil {
-			r.Log.Error(err, "Failed to create or update addon kernel MachineConfig")
-			return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err
 		}
 	}
 

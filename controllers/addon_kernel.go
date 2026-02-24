@@ -64,7 +64,9 @@ func (r *KataConfigOpenShiftReconciler) CreateOrUpdateAddonKernelMC(machinePool 
 			mc.Labels = map[string]string{}
 		}
 		mc.Labels["machineconfiguration.openshift.io/role"] = machinePool
-		mc.Labels["app"] = "sandboxed-containers-addon"
+		// mc.Labels["app"] = "sandboxed-containers-addon"
+		mc.Labels["app"] = r.kataConfig.Name
+		r.Log.Info("[rc-debug] mc.Labels[app] = r.kataConfig.Name", r.kataConfig.Name)
 
 		mc.Spec = mcfgv1.MachineConfigSpec{
 			Config: runtime.RawExtension{Raw: ignJSON},
