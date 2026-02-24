@@ -17,6 +17,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -600,6 +601,7 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 }
 
 func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.MachineConfig, error) {
+	ctx := context.TODO()
 	r.Log.Info("Creating MachineConfig for Custom Resource")
 
 	if r.ImgMc != nil {
@@ -607,11 +609,90 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		return r.ImgMc, nil
 	}
 
+	cm := &corev1.ConfigMap{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      "kata-addon-artifacts",
+		Namespace: OperatorNamespace,
+	}, cm)
+
+	addonEnabled := false
+	var addonImage, kernelPath string
+
+	if err != nil {
+		if !k8serrors.IsNotFound(err) {
+			return nil, err
+		}
+		r.Log.Info("kata-addon-artifacts ConfigMap not found, skipping addon")
+	} else {
+		addonImage = cm.Data["addonImage"]
+		kernelPath = cm.Data["kernelPath"]
+
+		if addonImage == "" || kernelPath == "" {
+			r.Log.Info("kata-addon-artifacts ConfigMap missing fields, skipping addon")
+		} else {
+			addonEnabled = true
+			r.Log.Info("Addon kernel enabled",
+				"addonImage", addonImage,
+				"kernelPath", kernelPath)
+		}
+	}
+
 	// Create extension MachineConfig
 	ic := ignTypes.Config{
 		Ignition: ignTypes.Ignition{
 			Version: "3.2.0",
 		},
+	}
+
+	if addonEnabled {
+		mode := 0755
+		enabled := true
+
+		addonScript := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+IMAGE="%s"
+KERNEL="%s"
+DEST="/var/cache/kata-containers/vmlinuz.ibm-se"
+echo "[INFO] Pulling addon image: ${IMAGE}"
+podman pull ${IMAGE}
+CTR=$(podman create ${IMAGE})
+podman cp ${CTR}:${KERNEL} ${DEST}
+podman rm ${CTR}
+chmod 0755 ${DEST}
+echo "[INFO] Kata addon kernel update complete"
+`, addonImage, kernelPath)
+
+		source := "data:text/plain;base64," +
+			base64.StdEncoding.EncodeToString([]byte(addonScript))
+
+		ic.Storage.Files = append(ic.Storage.Files, ignTypes.File{
+			Node: ignTypes.Node{
+				Path: "/usr/local/bin/kata-addon-kernel.sh",
+			},
+			FileEmbedded1: ignTypes.FileEmbedded1{
+				Contents: ignTypes.Resource{
+					Source: &source,
+				},
+				Mode: &mode,
+			},
+		})
+
+		unitContent := `[Unit]
+Description=Install Kata kernel from addon image
+After=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/kata-addon-kernel.sh
+RemainAfterExit=true
+[Install]
+WantedBy=multi-user.target
+`
+
+		ic.Systemd.Units = append(ic.Systemd.Units, ignTypes.Unit{
+			Name:     "kata-addon-kernel.service",
+			Enabled:  &enabled,
+			Contents: &unitContent,
+		})
 	}
 
 	icb, err := json.Marshal(ic)
