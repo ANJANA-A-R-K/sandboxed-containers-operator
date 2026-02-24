@@ -628,7 +628,7 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		kernelPath = cm.Data["kernelPath"]
 
 		if addonImage == "" || kernelPath == "" {
-			return nil, fmt.Errorf("invalid kata-addon-artifacts ConfigMap: missing addonImage or kernelPath")
+			r.Log.Info("kata-addon-artifacts ConfigMap missing fields, skipping addon logic")
 		}
 
 		addonEnabled = true
