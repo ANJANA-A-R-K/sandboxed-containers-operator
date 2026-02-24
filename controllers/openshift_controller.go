@@ -23,6 +23,7 @@ import (
 	"reflect"
 	"strings"
 	"time"
+	"encoding/base64"
 
 	semver "github.com/Masterminds/semver/v3"
 	appsv1 "k8s.io/api/apps/v1"
@@ -607,11 +608,92 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		return r.ImgMc, nil
 	}
 
+	cm := &corev1.ConfigMap{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      "kata-addon-artifacts",
+		Namespace: OperatorNamespace,
+	}, cm)
+
+	addonEnabled := false
+	var addonImage, kernelPath string
+
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			return nil, err
+		}
+		r.Log.Info("kata-addon-artifacts ConfigMap not found, skipping addon kernel logic")
+	} else {
+		addonImage = cm.Data["addonImage"]
+		kernelPath = cm.Data["kernelPath"]
+
+		if addonImage == "" || kernelPath == "" {
+			return nil, fmt.Errorf("invalid kata-addon-artifacts ConfigMap: missing addonImage or kernelPath")
+		}
+
+		addonEnabled = true
+		r.Log.Info("Addon kernel enabled",
+			"addonImage", addonImage,
+			"kernelPath", kernelPath)
+	}
+
 	// Create extension MachineConfig
 	ic := ignTypes.Config{
 		Ignition: ignTypes.Ignition{
 			Version: "3.2.0",
 		},
+	}
+
+	if addonEnabled {
+		mode := 0755
+		enabled := true
+
+		addonScript := fmt.Sprintf(`#!/bin/bash
+set -euo pipefail
+
+IMAGE="%s"
+KERNEL="%s"
+DEST="/var/cache/kata-containers/vmlinuz.ibm-se"
+
+echo "[INFO] Pulling addon image: ${IMAGE}"
+podman pull ${IMAGE}
+
+CTR=$(podman create ${IMAGE})
+podman cp ${CTR}:${KERNEL} ${DEST}
+podman rm ${CTR}
+
+chmod 0755 ${DEST}
+echo "[INFO] Kata addon kernel update complete"
+`, addonImage, kernelPath)
+
+		ic.Storage.Files = append(ic.Storage.Files, ignTypes.File{
+			Node: ignTypes.Node{
+				Path: "/usr/local/bin/kata-addon-kernel.sh",
+			},
+			FileEmbedded1: ignTypes.FileEmbedded1{
+				Contents: ignTypes.Resource{
+					Source: ptr("data:text/plain;base64," +
+						base64.StdEncoding.EncodeToString([]byte(addonScript))),
+				},
+				Mode: &mode,
+			},
+		})
+
+		ic.Systemd.Units = append(ic.Systemd.Units, ignTypes.Unit{
+			Name:    "kata-addon-kernel.service",
+			Enabled: &enabled,
+			Contents: ptr(`[Unit]
+Description=Install Kata kernel from addon image
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/kata-addon-kernel.sh
+RemainAfterExit=true
+
+[Install]
+WantedBy=multi-user.target
+`),
+		})
 	}
 
 	icb, err := json.Marshal(ic)
@@ -1041,11 +1123,6 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 		}
 	}
 
-	if err := r.DeleteAddonKernelMC(); err != nil {
-		r.Log.Error(err, "Failed to delete addon kernel MC")
-		return ctrl.Result{Requeue: true, RequeueAfter: 15 * time.Second}, err
-	}
-
 	isConvergedCluster, _ := r.checkConvergedCluster()
 
 	// Conditions to detect whether we need to wait for the MCO to start
@@ -1178,11 +1255,6 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 	wasMcJustCreated, err := r.createMc(machinePool)
 	if err != nil {
 		return ctrl.Result{Requeue: true}, nil
-	}
-
-	if err := r.CreateOrUpdateAddonKernelMC(machinePool); err != nil {
-		r.Log.Error(err, "Failed to create or update addon kernel MachineConfig")
-		return ctrl.Result{Requeue: true, RequeueAfter: 20 * time.Second}, err
 	}
 
 	if wasMcJustCreated {
