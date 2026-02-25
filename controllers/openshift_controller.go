@@ -671,7 +671,7 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 				Contents: ignTypes.Resource{
 					Source: &source,
 				},
-				Mode:      &mode,
+				Mode: &mode,
 			},
 		})
 	}
