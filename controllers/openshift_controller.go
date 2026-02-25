@@ -606,6 +606,9 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 	return current.LessThan(min), currentVersion, nil
 }
 
+// getAddonConfig retrieves the kata addon configuration from the "kata-addon-artifacts" ConfigMap in the operator namespace.
+// This configuration contains the addon image reference and kernel path required for kata-se (IBM Secure Execution) deployments.
+// NOTE: This logic is applicable only for kata-se / IBM Secure Execution (s390x).
 func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*addonConfig, error) {
 	cm := &corev1.ConfigMap{}
 	err := r.Client.Get(ctx, types.NamespacedName{
@@ -651,57 +654,27 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 	}
 
 	if addonCfg != nil {
-		mode := 0755
+		mode := 0644
 
-		const addonScriptTemplate = `#!/bin/bash
-set -euo pipefail
-IMAGE="%s"
-KERNEL="%s"
-DEST="/var/cache/kata-containers/vmlinuz.ibm-se"
-echo "[INFO] Pulling addon image: ${IMAGE}"
-podman pull ${IMAGE}
-CTR=$(podman create ${IMAGE})
-podman cp ${CTR}:${KERNEL} ${DEST}
-podman rm ${CTR}
-chmod 0755 ${DEST}
-echo "[INFO] Kata addon kernel update complete"
-`
-
-		addonScript := fmt.Sprintf(addonScriptTemplate,
+		configContent := fmt.Sprintf(
+			"IMAGE=%s\nKERNEL=%s\n",
 			addonCfg.Image,
 			addonCfg.KernelPath,
 		)
 
-		source := "data:text/plain;base64," +
-			base64.StdEncoding.EncodeToString([]byte(addonScript))
+		source := "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte(configContent))
 
 		ic.Storage.Files = append(ic.Storage.Files, ignTypes.File{
 			Node: ignTypes.Node{
-				Path: "/usr/local/bin/kata-addon-kernel.sh",
+				Path: "/etc/kata-containers/kata-addon-kernel.conf",
 			},
 			FileEmbedded1: ignTypes.FileEmbedded1{
 				Contents: ignTypes.Resource{
 					Source: &source,
 				},
-				Mode: &mode,
+				Mode:      &mode,
+				Overwrite: ptr.To(true),
 			},
-		})
-
-		const unitContent = `[Unit]
-Description=Install Kata kernel from addon image
-After=network-online.target
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/kata-addon-kernel.sh
-RemainAfterExit=true
-[Install]
-WantedBy=multi-user.target
-`
-
-		ic.Systemd.Units = append(ic.Systemd.Units, ignTypes.Unit{
-			Name:     "kata-addon-kernel.service",
-			Enabled:  ptr.To(true),
-			Contents: ptr.To(unitContent),
 		})
 	}
 
@@ -1108,18 +1081,10 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 	r.Log.Info("Making sure parent MCP is synced properly, SCNodeRole=" + machinePool)
 	r.setInProgressConditionToUninstalling()
 
-	addonCfg, err := r.getAddonConfig(context.TODO())
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	mc, err := r.newMCForCR(machinePool, addonCfg)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	var isMcDeleted bool
 
-	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
+	mc := &mcfgv1.MachineConfig{}
+	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: extension_mc_name}, mc)
 	if err != nil && k8serrors.IsNotFound(err) {
 		isMcDeleted = true
 		// Reset ImgMc
