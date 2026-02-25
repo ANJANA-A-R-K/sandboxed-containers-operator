@@ -69,7 +69,7 @@ type KataConfigOpenShiftReconciler struct {
 	DeploymentMode DeploymentMode
 }
 
-type addonConfig struct {
+type customKernelConfig struct {
 	Image      string
 	KernelPath string
 }
@@ -608,7 +608,7 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 // getAddonConfig retrieves the kata addon configuration from the "kata-addon-artifacts" ConfigMap in the operator namespace.
 // This configuration contains the addon image reference and kernel path required for kata-se (IBM Secure Execution) deployments.
 // NOTE: This logic is applicable only for kata-se / IBM Secure Execution (s390x).
-func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*addonConfig, error) {
+func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*customKernelConfig, error) {
 	cm := &corev1.ConfigMap{}
 	err := r.Client.Get(ctx, types.NamespacedName{
 		Name:      "kata-addon-artifacts",
@@ -617,7 +617,7 @@ func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*ad
 
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.Log.Info("Skipping addon, cm not found")
+			r.Log.Info("Skipping custom kernel addon, ConfigMap not found", "ConfigMap", "kata-addon-artifacts")
 			return nil, nil
 		}
 		return nil, err
@@ -627,17 +627,17 @@ func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*ad
 	kernel := cm.Data["kernelPath"]
 
 	if image == "" || kernel == "" {
-		r.Log.Info("Skipping addon, image/kernel not found")
+		r.Log.Info("Skipping custom kernel addon, image or kernel not found in ConfigMap", "ConfigMap", "kata-addon-artifacts")
 		return nil, nil
 	}
 
-	return &addonConfig{
+	return &customKernelConfig{
 		Image:      image,
 		KernelPath: kernel,
 	}, nil
 }
 
-func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg *addonConfig) (*mcfgv1.MachineConfig, error) {
+func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, customKernelCfg *customKernelConfig) (*mcfgv1.MachineConfig, error) {
 	r.Log.Info("Creating MachineConfig for Custom Resource")
 
 	if r.ImgMc != nil {
@@ -652,13 +652,13 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 		},
 	}
 
-	if addonCfg != nil {
+	if customKernelCfg != nil {
 		mode := 0644
 
 		configContent := fmt.Sprintf(
 			"IMAGE=%s\nKERNEL=%s\n",
-			addonCfg.Image,
-			addonCfg.KernelPath,
+			customKernelCfg.Image,
+			customKernelCfg.KernelPath,
 		)
 
 		source := "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte(configContent))
@@ -1229,12 +1229,12 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		r.Log.Info("SCNodeRole is: " + machinePool)
 	}
 
-	addonCfg, err := r.getAddonConfig(context.TODO())
+	customKernelCfg, err := r.getAddonConfig(context.TODO())
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
-	wasMcJustCreated, err := r.createMc(machinePool, addonCfg)
+	wasMcJustCreated, err := r.createMc(machinePool, customKernelCfg)
 	if err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -1348,7 +1348,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 // If the first return value is 'true' it means that the MC was just created
 // by this call, 'false' means that it's already existed.  As usual, the first
 // return value is only valid if the second one is nil.
-func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, addonCfg *addonConfig) (bool, error) {
+func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKernelCfg *customKernelConfig) (bool, error) {
 
 	// In case we're returning an error we want to make it explicit that
 	// the first return value is "not care".  Unfortunately golang seems
@@ -1359,7 +1359,7 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, addonCfg *a
 	/* Create Machine Config object to install sandboxed containers */
 
 	r.Log.Info("creating RHCOS MachineConfig")
-	mc, err := r.newMCForCR(machinePool, addonCfg)
+	mc, err := r.newMCForCR(machinePool, customKernelCfg)
 	if err != nil {
 		return dummy, err
 	}
