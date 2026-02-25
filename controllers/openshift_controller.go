@@ -17,6 +17,7 @@ package controllers
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -66,6 +67,11 @@ type KataConfigOpenShiftReconciler struct {
 	ImgMc *mcfgv1.MachineConfig
 
 	DeploymentMode DeploymentMode
+}
+
+type customKernelConfig struct {
+	Image      string
+	KernelPath string
 }
 
 const (
@@ -599,7 +605,39 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 	return current.LessThan(min), currentVersion, nil
 }
 
-func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.MachineConfig, error) {
+// getCustomKernelConfig retrieves the kata addon configuration from the "kata-addon-artifacts" ConfigMap in the operator namespace.
+// This configuration contains the addon image reference and kernel path required for kata-se (IBM Secure Execution) deployments.
+// NOTE: This logic is applicable only for kata-se / IBM Secure Execution (s390x).
+func (r *KataConfigOpenShiftReconciler) getCustomKernelConfig(ctx context.Context) (*customKernelConfig, error) {
+	cm := &corev1.ConfigMap{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      "kata-addon-artifacts",
+		Namespace: OperatorNamespace,
+	}, cm)
+
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			r.Log.Info("Skipping custom kernel addon, ConfigMap not found", "ConfigMap", "kata-addon-artifacts")
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	image := cm.Data["addonImage"]
+	kernel := cm.Data["kernelPath"]
+
+	if image == "" || kernel == "" {
+		r.Log.Info("Skipping custom kernel addon, image or kernel not found in ConfigMap", "ConfigMap", "kata-addon-artifacts")
+		return nil, nil
+	}
+
+	return &customKernelConfig{
+		Image:      image,
+		KernelPath: kernel,
+	}, nil
+}
+
+func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, customKernelCfg *customKernelConfig) (*mcfgv1.MachineConfig, error) {
 	r.Log.Info("Creating MachineConfig for Custom Resource")
 
 	if r.ImgMc != nil {
@@ -612,6 +650,30 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		Ignition: ignTypes.Ignition{
 			Version: "3.2.0",
 		},
+	}
+
+	if customKernelCfg != nil {
+		mode := 0644
+
+		configContent := fmt.Sprintf(
+			"IMAGE=%s\nKERNEL=%s\n",
+			customKernelCfg.Image,
+			customKernelCfg.KernelPath,
+		)
+
+		source := "data:text/plain;base64," + base64.StdEncoding.EncodeToString([]byte(configContent))
+
+		ic.Storage.Files = append(ic.Storage.Files, ignTypes.File{
+			Node: ignTypes.Node{
+				Path: "/etc/kata-containers/kata-addon-kernel.conf",
+			},
+			FileEmbedded1: ignTypes.FileEmbedded1{
+				Contents: ignTypes.Resource{
+					Source: &source,
+				},
+				Mode: &mode,
+			},
+		})
 	}
 
 	icb, err := json.Marshal(ic)
@@ -1017,13 +1079,10 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 	r.Log.Info("Making sure parent MCP is synced properly, SCNodeRole=" + machinePool)
 	r.setInProgressConditionToUninstalling()
 
-	mc, err := r.newMCForCR(machinePool)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 	var isMcDeleted bool
 
-	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
+	mc := &mcfgv1.MachineConfig{}
+	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: extension_mc_name}, mc)
 	if err != nil && k8serrors.IsNotFound(err) {
 		isMcDeleted = true
 		// Reset ImgMc
@@ -1170,7 +1229,12 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		r.Log.Info("SCNodeRole is: " + machinePool)
 	}
 
-	wasMcJustCreated, err := r.createMc(machinePool)
+	customKernelCfg, err := r.getCustomKernelConfig(context.TODO())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	wasMcJustCreated, err := r.createMc(machinePool, customKernelCfg)
 	if err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -1284,7 +1348,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 // If the first return value is 'true' it means that the MC was just created
 // by this call, 'false' means that it's already existed.  As usual, the first
 // return value is only valid if the second one is nil.
-func (r *KataConfigOpenShiftReconciler) createMc(machinePool string) (bool, error) {
+func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKernelCfg *customKernelConfig) (bool, error) {
 
 	// In case we're returning an error we want to make it explicit that
 	// the first return value is "not care".  Unfortunately golang seems
@@ -1295,7 +1359,7 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string) (bool, erro
 	/* Create Machine Config object to install sandboxed containers */
 
 	r.Log.Info("creating RHCOS MachineConfig")
-	mc, err := r.newMCForCR(machinePool)
+	mc, err := r.newMCForCR(machinePool, customKernelCfg)
 	if err != nil {
 		return dummy, err
 	}
