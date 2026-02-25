@@ -69,6 +69,11 @@ type KataConfigOpenShiftReconciler struct {
 	DeploymentMode DeploymentMode
 }
 
+type addonConfig struct {
+	Image      string
+	KernelPath string
+}
+
 const (
 	OperatorNamespace             = "openshift-sandboxed-containers-operator"
 	dashboard_configmap_name      = "grafana-dashboard-sandboxed-containers"
@@ -600,7 +605,36 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 	return current.LessThan(min), currentVersion, nil
 }
 
-func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.MachineConfig, error) {
+func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*addonConfig, error) {
+	cm := &corev1.ConfigMap{}
+	err := r.Client.Get(ctx, types.NamespacedName{
+		Name:      "kata-addon-artifacts",
+		Namespace: OperatorNamespace,
+	}, cm)
+
+	if err != nil {
+		if k8serrors.IsNotFound(err) {
+			r.Log.Info("Skipping addon, cm not found")
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	image := cm.Data["addonImage"]
+	kernel := cm.Data["kernelPath"]
+
+	if image == "" || kernel == "" {
+		r.Log.Info("Skipping addon, image/kernel not found")
+		return nil, nil
+	}
+
+	return &addonConfig{
+		Image:      image,
+		KernelPath: kernel,
+	}, nil
+}
+
+func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg *addonConfig) (*mcfgv1.MachineConfig, error) {
 	ctx := context.TODO()
 	r.Log.Info("Creating MachineConfig for Custom Resource")
 
@@ -609,33 +643,6 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		return r.ImgMc, nil
 	}
 
-	cm := &corev1.ConfigMap{}
-	err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      "kata-addon-artifacts",
-		Namespace: OperatorNamespace,
-	}, cm)
-
-	addonEnabled := false
-	var addonImage, kernelPath string
-
-	if err != nil {
-		if !k8serrors.IsNotFound(err) {
-			return nil, err
-		}
-		r.Log.Info("kata-addon-artifacts ConfigMap not found, skipping addon")
-	} else {
-		addonImage = cm.Data["addonImage"]
-		kernelPath = cm.Data["kernelPath"]
-
-		if addonImage == "" || kernelPath == "" {
-			r.Log.Info("kata-addon-artifacts ConfigMap missing fields, skipping addon")
-		} else {
-			addonEnabled = true
-			r.Log.Info("Addon kernel enabled",
-				"addonImage", addonImage,
-				"kernelPath", kernelPath)
-		}
-	}
 
 	// Create extension MachineConfig
 	ic := ignTypes.Config{
@@ -644,11 +651,10 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string) (*mcfgv1.
 		},
 	}
 
-	if addonEnabled {
+	if addonCfg != nil {
 		mode := 0755
-		enabled := true
 
-		addonScript := fmt.Sprintf(`#!/bin/bash
+		const addonScript := fmt.Sprintf(`#!/bin/bash
 set -euo pipefail
 IMAGE="%s"
 KERNEL="%s"
@@ -660,7 +666,7 @@ podman cp ${CTR}:${KERNEL} ${DEST}
 podman rm ${CTR}
 chmod 0755 ${DEST}
 echo "[INFO] Kata addon kernel update complete"
-`, addonImage, kernelPath)
+`, addonCfg.Image, addonCfg.KernelPath)
 
 		source := "data:text/plain;base64," +
 			base64.StdEncoding.EncodeToString([]byte(addonScript))
@@ -677,7 +683,7 @@ echo "[INFO] Kata addon kernel update complete"
 			},
 		})
 
-		unitContent := `[Unit]
+		const unitContent := `[Unit]
 Description=Install Kata kernel from addon image
 After=network-online.target
 [Service]
@@ -690,8 +696,8 @@ WantedBy=multi-user.target
 
 		ic.Systemd.Units = append(ic.Systemd.Units, ignTypes.Unit{
 			Name:     "kata-addon-kernel.service",
-			Enabled:  &enabled,
-			Contents: &unitContent,
+			Enabled:  ptr.To(true),
+			Contents: ptr.To(unitContent),
 		})
 	}
 
@@ -1098,7 +1104,12 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 	r.Log.Info("Making sure parent MCP is synced properly, SCNodeRole=" + machinePool)
 	r.setInProgressConditionToUninstalling()
 
-	mc, err := r.newMCForCR(machinePool)
+	addonCfg, err := r.getAddonConfig(context.TODO())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	mc, err := r.newMCForCR(machinePool, addonCfg)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -1251,7 +1262,12 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 		r.Log.Info("SCNodeRole is: " + machinePool)
 	}
 
-	wasMcJustCreated, err := r.createMc(machinePool)
+	addonCfg, err := r.getAddonConfig(context.TODO())
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	wasMcJustCreated, err := r.createMc(machinePool, addonCfg)
 	if err != nil {
 		return ctrl.Result{Requeue: true}, nil
 	}
@@ -1365,7 +1381,7 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigInstallRequest() (ctrl.
 // If the first return value is 'true' it means that the MC was just created
 // by this call, 'false' means that it's already existed.  As usual, the first
 // return value is only valid if the second one is nil.
-func (r *KataConfigOpenShiftReconciler) createMc(machinePool string) (bool, error) {
+func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, addonCfg *addonConfig) (bool, error) {
 
 	// In case we're returning an error we want to make it explicit that
 	// the first return value is "not care".  Unfortunately golang seems
@@ -1376,7 +1392,7 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string) (bool, erro
 	/* Create Machine Config object to install sandboxed containers */
 
 	r.Log.Info("creating RHCOS MachineConfig")
-	mc, err := r.newMCForCR(machinePool)
+	mc, err := r.newMCForCR(machinePool, addonCfg)
 	if err != nil {
 		return dummy, err
 	}
