@@ -27,6 +27,7 @@ import (
 
 	semver "github.com/Masterminds/semver/v3"
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/utils/ptr"
 
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -635,7 +636,6 @@ func (r *KataConfigOpenShiftReconciler) getAddonConfig(ctx context.Context) (*ad
 }
 
 func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg *addonConfig) (*mcfgv1.MachineConfig, error) {
-	ctx := context.TODO()
 	r.Log.Info("Creating MachineConfig for Custom Resource")
 
 	if r.ImgMc != nil {
