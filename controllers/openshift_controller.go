@@ -643,7 +643,6 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 		return r.ImgMc, nil
 	}
 
-
 	// Create extension MachineConfig
 	ic := ignTypes.Config{
 		Ignition: ignTypes.Ignition{
@@ -654,7 +653,7 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 	if addonCfg != nil {
 		mode := 0755
 
-		const addonScript := fmt.Sprintf(`#!/bin/bash
+		const addonScriptTemplate = `#!/bin/bash
 set -euo pipefail
 IMAGE="%s"
 KERNEL="%s"
@@ -666,7 +665,12 @@ podman cp ${CTR}:${KERNEL} ${DEST}
 podman rm ${CTR}
 chmod 0755 ${DEST}
 echo "[INFO] Kata addon kernel update complete"
-`, addonCfg.Image, addonCfg.KernelPath)
+`
+
+		addonScript := fmt.Sprintf(addonScriptTemplate,
+			addonCfg.Image,
+			addonCfg.KernelPath,
+		)
 
 		source := "data:text/plain;base64," +
 			base64.StdEncoding.EncodeToString([]byte(addonScript))
@@ -683,7 +687,7 @@ echo "[INFO] Kata addon kernel update complete"
 			},
 		})
 
-		const unitContent := `[Unit]
+		const unitContent = `[Unit]
 Description=Install Kata kernel from addon image
 After=network-online.target
 [Service]
