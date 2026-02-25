@@ -673,7 +673,6 @@ func (r *KataConfigOpenShiftReconciler) newMCForCR(machinePool string, addonCfg 
 					Source: &source,
 				},
 				Mode:      &mode,
-				Overwrite: ptr.To(true),
 			},
 		})
 	}
