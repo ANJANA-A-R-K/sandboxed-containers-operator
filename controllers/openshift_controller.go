@@ -80,6 +80,7 @@ const (
 	dashboard_configmap_namespace = "openshift-config-managed"
 	container_runtime_config_name = "kata-crio-config"
 	extension_mc_name             = "50-enable-sandboxed-containers-extension"
+	KataAddonConfigMapName        = "kata-addon-artifacts"
 	// Use same Pod Overhead as upstream kata-deploy using, see
 	// https://github.com/kata-containers/kata-containers/blob/main/tools/packaging/kata-deploy/runtimeclasses/kata-qemu.yaml#L7
 	kataRuntimeClassName        = "kata"
@@ -611,13 +612,13 @@ func (r *KataConfigOpenShiftReconciler) isOCPVersionLessThan(minVersion string) 
 func (r *KataConfigOpenShiftReconciler) getCustomKernelConfig(ctx context.Context) (*customKernelConfig, error) {
 	cm := &corev1.ConfigMap{}
 	err := r.Client.Get(ctx, types.NamespacedName{
-		Name:      "kata-addon-artifacts",
+		Name:      KataAddonConfigMapName,
 		Namespace: OperatorNamespace,
 	}, cm)
 
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			r.Log.Info("Skipping custom kernel addon, ConfigMap not found", "ConfigMap", "kata-addon-artifacts")
+			r.Log.Info("Skipping custom kernel addon, ConfigMap not found", "ConfigMap", KataAddonConfigMapName)
 			return nil, nil
 		}
 		return nil, err
@@ -627,7 +628,7 @@ func (r *KataConfigOpenShiftReconciler) getCustomKernelConfig(ctx context.Contex
 	kernel := cm.Data["kernelPath"]
 
 	if image == "" || kernel == "" {
-		r.Log.Info("Skipping custom kernel addon, image or kernel not found in ConfigMap", "ConfigMap", "kata-addon-artifacts")
+		r.Log.Info("Skipping custom kernel addon, image or kernel not found in ConfigMap", "ConfigMap", KataAddonConfigMapName)
 		return nil, nil
 	}
 
@@ -1079,10 +1080,14 @@ func (r *KataConfigOpenShiftReconciler) processKataConfigDeleteRequest() (ctrl.R
 	r.Log.Info("Making sure parent MCP is synced properly, SCNodeRole=" + machinePool)
 	r.setInProgressConditionToUninstalling()
 
+	mc, err := r.newMCForCR(machinePool, nil)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	var isMcDeleted bool
 
-	mc := &mcfgv1.MachineConfig{}
-	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: extension_mc_name}, mc)
+	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
 	if err != nil && k8serrors.IsNotFound(err) {
 		isMcDeleted = true
 		// Reset ImgMc
