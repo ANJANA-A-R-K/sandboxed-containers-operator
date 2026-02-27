@@ -1370,11 +1370,15 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKerne
 	}
 
 	existingMc := &mcfgv1.MachineConfig{}
+	r.Log.Info("value of existingMc", "existingMc", existingMc.Spec)
+	r.Log.Info("value of Mc", "mc", mc.Spec)
+
 	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, existingMc)
 	// err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
 	if err != nil && (k8serrors.IsNotFound(err) || k8serrors.IsGone(err)) {
 
-		if err := r.Client.Create(context.TODO(), mc); err != nil {
+		err = r.Client.Create(context.TODO(), mc)
+		if err != nil {
 			r.Log.Error(err, "Failed to create a new MachineConfig ", "mc.Name", mc.Name)
 			return dummy, err
 		}
@@ -1383,9 +1387,7 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKerne
 	} else if err != nil {
 		r.Log.Info("failed to retrieve MachineConfig", "err", err)
 		return dummy, err
-	}
-
-	if !reflect.DeepEqual(existingMc.Spec, mc.Spec) {
+	} else if !reflect.DeepEqual(existingMc.Spec, mc.Spec) {
 
 		r.Log.Info("MachineConfig spec changed, updating", "mc.Name", mc.Name)
 
@@ -1395,13 +1397,13 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKerne
 			r.Log.Error(err, "Failed to update MachineConfig", "mc.Name", mc.Name)
 			return dummy, err
 		}
-
-		return true, nil
+		return false, nil
+	} else {
+		r.Log.Info("MachineConfig already exists")
+		return false, nil
 	}
-
-	r.Log.Info("MachineConfig already exists and is up-to-date")
-	return false, nil
-
+	// r.Log.Info("MachineConfig already exists and is up-to-date")
+	// return false, nil
 }
 
 func (r *KataConfigOpenShiftReconciler) makeReconcileRequest() reconcile.Request {
