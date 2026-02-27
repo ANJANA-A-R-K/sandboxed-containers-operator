@@ -1369,11 +1369,12 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKerne
 		return dummy, err
 	}
 
-	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
+	existingMc := &mcfgv1.MachineConfig{}
+	err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, existingMc)
+	// err = r.Client.Get(context.TODO(), types.NamespacedName{Name: mc.Name}, mc)
 	if err != nil && (k8serrors.IsNotFound(err) || k8serrors.IsGone(err)) {
 
-		err = r.Client.Create(context.TODO(), mc)
-		if err != nil {
+		if err := r.Client.Create(context.TODO(), mc); err != nil {
 			r.Log.Error(err, "Failed to create a new MachineConfig ", "mc.Name", mc.Name)
 			return dummy, err
 		}
@@ -1382,10 +1383,24 @@ func (r *KataConfigOpenShiftReconciler) createMc(machinePool string, customKerne
 	} else if err != nil {
 		r.Log.Info("failed to retrieve MachineConfig", "err", err)
 		return dummy, err
-	} else {
-		r.Log.Info("MachineConfig already exists")
-		return false, nil
 	}
+
+	if !reflect.DeepEqual(existingMc.Spec, mc.Spec) {
+
+		r.Log.Info("MachineConfig spec changed, updating", "mc.Name", mc.Name)
+
+		existingMc.Spec = mc.Spec
+
+		if err := r.Client.Update(context.TODO(), existingMc); err != nil {
+			r.Log.Error(err, "Failed to update MachineConfig", "mc.Name", mc.Name)
+			return dummy, err
+		}
+
+		return true, nil
+	}
+
+	r.Log.Info("MachineConfig already exists and is up-to-date")
+	return false, nil
 
 }
 
